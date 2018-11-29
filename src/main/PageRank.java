@@ -7,75 +7,72 @@ import mpi.*;
 
 public class PageRank {
 
-	private static Intracomm comunicador;
-
 	public static void main(String args[]) throws Exception {
 
-		/* Definition of data structure and variables for MPI PageRank */
-		HashMap<Integer, ArrayList<Integer>> adjacencyMatrix = new HashMap<>();
-		ArrayList<Integer> am_index = new ArrayList<>();
-		LinkedHashMap<Integer, Double> pagerankvalues = new LinkedHashMap<>();
+		/* Declaração de variáveis e estruturas do PageRank */
+		HashMap<Integer, ArrayList<Integer>> dados = new HashMap<>();
+		ArrayList<Integer> indiceDados = new ArrayList<>();
+		LinkedHashMap<Integer, Double> pageRanks = new LinkedHashMap<>();
 		String filename = args[3], outfilename = "saida.txt";
-		double threshold = Double.parseDouble(args[5]); //default value
-		int totalNumUrls, numUrls, numIterations = Integer.parseInt(args[4]);
-		long input_start, input_end = 0, comp_start = 0, comp_end = 0, output_start, output_end;
+		double limite = Double.parseDouble(args[5]);
+		int totalUrls, numeroUrls, interacoes = Integer.parseInt(args[4]);
+		long inicioEntrada, finalEntrada = 0, inicioExecucao = 0, finalExecucao = 0, inicioSaida, finalSaida;
 
-		/* MPI Initialization */
+		/* Inicialização do MPI */
 		MPI.Init(args);
 
-		comunicador = MPI.COMM_WORLD;
+		int rank = MPI.COMM_WORLD.Rank();
 
-		int rank = comunicador.Rank();
+		/* Leitura dos dados através do arquivo para cada processo*/
+		inicioEntrada = System.currentTimeMillis();
 
-		/* Read local adjacency matrix from file for each process */
-		input_start = System.currentTimeMillis();
-		mpi_read(filename, adjacencyMatrix, am_index);
+		leituraDados(filename, dados, indiceDados);
 
 		if(rank == 0) {
 
-			input_end = System.currentTimeMillis() - input_start;
+			finalEntrada = System.currentTimeMillis() - inicioEntrada;
 
 		}
 
-		/* Set totalNumUrls */
-		numUrls = am_index.size() / 2;
+		/* Set totalUrls */
+		numeroUrls = indiceDados.size() / 2;
 		int numURL[] = new int[1];
-		numURL[0] = numUrls;
+		numURL[0] = numeroUrls;
 		int totalNumUrl[] = new int[1];
 		MPI.COMM_WORLD.Allreduce(numURL, 0, totalNumUrl, 0, 1, MPI.INT, MPI.SUM);
-		totalNumUrls = totalNumUrl[0];
-		double FinalRVT[] = new double[totalNumUrls];
+		totalUrls = totalNumUrl[0];
+		double FinalRVT[] = new double[totalUrls];
 
 		if (rank == 0)
-			comp_start = System.currentTimeMillis();
+			inicioExecucao = System.currentTimeMillis();
 
 
-		for (int k = 0; k < totalNumUrls; k++) {
-			FinalRVT[k] = 1.0 / totalNumUrls;
+		for (int k = 0; k < totalUrls; k++) {
+			FinalRVT[k] = 1.0 / totalUrls;
 		}
 
 		/* Start the core computation of MPI PageRank */
-		mpi_pagerankfunc(adjacencyMatrix, am_index, numUrls, totalNumUrls, numIterations, threshold, FinalRVT, MPI.COMM_WORLD);
+		mpi_pagerankfunc(dados, indiceDados, numeroUrls, totalUrls, interacoes, limite, FinalRVT);
 
 		if (rank == 0)
-			comp_end = System.currentTimeMillis() - comp_start;
+			finalExecucao = System.currentTimeMillis() - inicioExecucao;
 
 		/* Save results to a file */
 		if (rank == 0) {
 			for (int i = 0; i < FinalRVT.length; i++) {
-				pagerankvalues.put(i, FinalRVT[i]);
+				pageRanks.put(i, FinalRVT[i]);
 			}
 
-			output_start = System.currentTimeMillis();
-			mpi_write(outfilename, pagerankvalues);
-			output_end = System.currentTimeMillis() - output_start;
+			inicioSaida = System.currentTimeMillis();
+			mpi_write(outfilename, pageRanks);
+			finalSaida = System.currentTimeMillis() - inicioSaida;
 
 			System.out.println("Input file : " + args[3]);
 			System.out.println("Output file : " + args[4]);
 			System.out.println("Number of Iterations: " + args[5]);
-			System.out.println("Threshold: " + args[6]);
-			System.out.println("Total I/O time taken:" + (input_end + output_end) + " milliseconds");
-			System.out.println("Total Computation time taken:" + comp_end + " milliseconds");
+			System.out.println("limite: " + args[6]);
+			System.out.println("Total I/O time taken:" + (finalEntrada + finalSaida) + " milliseconds");
+			System.out.println("Total Computation time taken:" + finalExecucao + " milliseconds");
 		}
 		/* Release resources e.g. free(adjacency_matrix); */
 
@@ -83,136 +80,150 @@ public class PageRank {
 
 	}
 
-	private static void mpi_read(String filename, HashMap<Integer, ArrayList<Integer>> adjacency_matrix, ArrayList<Integer> am_index) throws IOException {
+	private static void leituraDados(String filename, HashMap<Integer, ArrayList<Integer>> dados, ArrayList<Integer> indiceDados) throws IOException {
 
-		int totalNumOfUrl = 0;
-		int totalRank = 0;
-		int numOfDivisions = 0;
-		int remainder = 0;
-		int startIndex = 0;
-		int blockSize = 0;
-		int rank = comunicador.Rank();
+		if(MPI.COMM_WORLD.Rank() == 0) {
 
-		if (rank == 0) {
+			//preenchimento dos nós destino, conforme dispostos no arquivo.
+			preencherNosDestino(filename, dados);
 
-				FileInputStream file = new FileInputStream("files/" + filename);
-				DataInputStream datastr = new DataInputStream(file);
-				BufferedReader urlreader = new BufferedReader(new InputStreamReader(datastr));
-				String adjmatrix;
+			ArrayList<Integer> nos = new ArrayList<>(dados.keySet());
+			int totalUrls = dados.size();
+			int numeroProcessos = MPI.COMM_WORLD.Size();
+			int divisoes = (totalUrls) / numeroProcessos;
+			int resto = (totalUrls) % numeroProcessos;
+			int strtIndex = 0, j = 0, inicio, h;
+			int tamBloco, tamLigacoes;
 
-				while ((adjmatrix = urlreader.readLine()) != null) {
-					ArrayList<Integer> target_urls_list = new ArrayList<Integer>();
+			for(int i = 0; i < numeroProcessos; i++) {
 
-					//Separates first node from rest of the nodes
-					String[] nodelist = adjmatrix.split(" ");
-					for (int i = 1; i < nodelist.length; i++) {
-						target_urls_list.add(Integer.valueOf(nodelist[i]));
-					}
+				h = 0;
+				inicio = strtIndex;
+				tamBloco = calcularTamanhoBloco(divisoes, resto, i);
+				tamLigacoes = tamBloco * 2;
 
-					adjacency_matrix.put(Integer.valueOf(nodelist[0]), target_urls_list);
-				}
-				datastr.close();
+				//vetor de ligações dos nós
+				int[] ligacoes = new int[tamLigacoes];
 
-			totalNumOfUrl = adjacency_matrix.size();
-			totalRank = comunicador.Size();
-			numOfDivisions = (totalNumOfUrl) / totalRank;
-			remainder = (totalNumOfUrl) % totalRank;
+				//repetição para acessar os valores dos nós a cada bloco
+				for(strtIndex = inicio; strtIndex <= ((inicio + tamBloco) - 1); strtIndex++) {
 
-			ArrayList<Integer> sourceUrls = new ArrayList<>(adjacency_matrix.keySet());
-
-			int strtIndex = 0, j = 0;
-			try {
-				for (int i = 0; i < totalRank; i++) {
-					startIndex = strtIndex;
-
-					int index = 0;
-
-					//Calculate block size
-					if (remainder == 0) {
-						blockSize = numOfDivisions;
-					} else {
-						blockSize = (i < remainder) ? (numOfDivisions + 1) : (numOfDivisions);
-					}
-
-					int[] t_am_index = new int[blockSize * 2];
-					for (strtIndex = startIndex; strtIndex <= ((startIndex + blockSize) - 1); strtIndex++) {
-
-						int source = sourceUrls.get(j++);
-						ArrayList<Integer> targetUrls = adjacency_matrix.get(source);
-						int outdegree = targetUrls.size();
-
-						t_am_index[index++] = source;
-						t_am_index[index++] = outdegree;
-
-					}
-
-					int[] am_size = new int[1];
-					am_size[0] = blockSize * 2;
-
-					if (i == 0) {
-						for (int l = 0; l < am_size[0]; l++) {
-							am_index.add(t_am_index[l]);
-						}
-					} else {
-						comunicador.Send(am_size, 0, 1, MPI.INT, i, 0);
-						comunicador.Send(t_am_index, 0, am_size[0], MPI.INT, i, 1);
-					}
-
-
-					for (int k = 0; k < blockSize * 2; k = k + 2) {
-						int source = t_am_index[k];
-						int outdegree = t_am_index[k + 1];
-						int[] targetList = new int[outdegree];
-
-						ArrayList<Integer> targetUrls = adjacency_matrix.get(source);
-
-						for (int n = 0; n < outdegree; n++) {
-							targetList[n] = targetUrls.get(n);
-						}
-
-						if (i != 0) {
-							comunicador.Send(targetList, 0, outdegree, MPI.INT, i, 2);
-						}
-					}
+					//atribuição ao vetor de ligações, determinando o nó e posteriormente seu número de ligações
+					int no = nos.get(j++);
+					ligacoes[h++] = no;
+					ligacoes[h++] = dados.get(no).size();
 
 				}
-			} catch (Exception ex) {
-				System.out.println("Error: " + ex.getMessage());
+
+				int[] tamDados = new int[1];
+				tamDados[0] = tamLigacoes;
+
+				//verificação para o primeiro processo
+				if(i == 0) {
+
+					//preenchimento dos valores de ligações a serem usados além do método
+					for(int l = 0; l < tamDados[0]; l++) {
+
+						indiceDados.add(ligacoes[l]);
+
+					}
+
+				} else {
+
+					//envio do tamanho dos dados para os demais processos
+					MPI.COMM_WORLD.Send(tamDados, 0, 1, MPI.INT, i, 0);
+					MPI.COMM_WORLD.Send(ligacoes, 0, tamDados[0], MPI.INT, i, 1);
+
+				}
+
+
+				for (int k = 0; k < tamBloco * 2; k = k + 2) {
+					int source = ligacoes[k];
+					int outdegree = ligacoes[k + 1];
+					int[] targetList = new int[outdegree];
+
+					ArrayList<Integer> targetUrls = dados.get(source);
+
+					for (int n = 0; n < outdegree; n++) {
+						targetList[n] = targetUrls.get(n);
+					}
+
+					if (i != 0) {
+						MPI.COMM_WORLD.Send(targetList, 0, outdegree, MPI.INT, i, 2);
+					}
+				}
+
 			}
+
 		} else {
 
 			int[] am_size = new int[1];
-			comunicador.Recv(am_size, 0, 1, MPI.INT, 0, 0);
+			MPI.COMM_WORLD.Recv(am_size, 0, 1, MPI.INT, 0, 0);
 
-			int[] t_am_index = new int[am_size[0]];
-			comunicador.Recv(t_am_index, 0, am_size[0], MPI.INT, 0, 1);
+			int[] t_indiceDados = new int[am_size[0]];
+			MPI.COMM_WORLD.Recv(t_indiceDados, 0, am_size[0], MPI.INT, 0, 1);
 
 			for (int l = 0; l < am_size[0]; l++) {
-				am_index.add(t_am_index[l]);
+				indiceDados.add(t_indiceDados[l]);
 			}
 
 			int no2Urls = am_size[0];
 			for (int p = 0; p < no2Urls; p = p + 2) {
-				int sourceUrl = t_am_index[p];
-				int outdegree = t_am_index[p + 1];
+				int sourceUrl = t_indiceDados[p];
+				int outdegree = t_indiceDados[p + 1];
 				int[] target = new int[outdegree];
-				comunicador.Recv(target, 0, outdegree, MPI.INT, 0, 2);
+				MPI.COMM_WORLD.Recv(target, 0, outdegree, MPI.INT, 0, 2);
 				ArrayList<Integer> targetUrls = new ArrayList<>();
 
 				for (int m = 0; m < outdegree; m++) {
 					targetUrls.add(target[m]);
 				}
 
-				adjacency_matrix.put(sourceUrl, targetUrls);
+				dados.put(sourceUrl, targetUrls);
 			}
 
 		}
 
 	}
 
+	//Calcula o tamanho do bloco, para que cada processo assuma este tamanho
+	private static int calcularTamanhoBloco(int divisoes, int resto, int i) {
 
-	private static void mpi_pagerankfunc(HashMap<Integer, ArrayList<Integer>> adjacencyMatrix, ArrayList<Integer> amIndex, int numUrls, int totalNumUrls,
-										 int numIterations, double threshold, double[] FinalRVT, Intracomm comunicador) {
+		return resto == 0 ? divisoes : (i < resto) ? (divisoes + 1) : (divisoes);
+
+	}
+
+	private static void preencherNosDestino(String filename, HashMap<Integer, ArrayList<Integer>> dados) throws IOException {
+
+		DataInputStream dataInputStream = new DataInputStream(new FileInputStream("files/" + filename));
+		BufferedReader leitorUrls = new BufferedReader(new InputStreamReader(dataInputStream));
+		String entrada;
+
+		while((entrada = leitorUrls.readLine()) != null) {
+
+			ArrayList<Integer> urlsDestino = new ArrayList<>();
+
+			//Declaração de array dos nós
+			String[] nos = entrada.split(" ");
+
+			//Preenchimento dos nós destino do primeiro nó da linha
+			for(int i = 1; i < nos.length; i++) {
+
+				urlsDestino.add(Integer.valueOf(nos[i]));
+
+			}
+
+			//relação dos nós destino com o primeiro nó da linha
+			dados.put(Integer.valueOf(nos[0]), urlsDestino);
+
+		}
+
+		dataInputStream.close();
+
+	}
+
+	private static void mpi_pagerankfunc(HashMap<Integer, ArrayList<Integer>> dados, ArrayList<Integer> amIndex, int numeroUrls, int totalUrls,
+										 int interacoes, double limite, double[] FinalRVT) {
 
 		/* Definitions of variables */
 		double dangling, sum_dangling, intermediate_rank_value, damping_factor = 0.85;
@@ -221,27 +232,27 @@ public class PageRank {
 
 
 		/* Allocate memory and initialize values for local_rank_values_table */
-		double[] intermediateRV = new double[totalNumUrls];
-		double[] localRV = new double[totalNumUrls];
+		double[] intermediateRV = new double[totalUrls];
+		double[] localRV = new double[totalUrls];
 		double[] danglingArray = new double[1];
 		double[] sumDangling = new double[1];
 		double[] deltaArray = new double[1];
 		deltaArray[0] = 0.0;
 
 		/* Get MPI rank */
-		int rank = comunicador.Rank();
+		int rank = MPI.COMM_WORLD.Rank();
 
 		if (rank == 0)
-			System.out.println("Max_Iterations: " + numIterations + ", Threshold: " + threshold);
+			System.out.println("Max_Iterations: " + interacoes + ", limite: " + limite);
 		/* Start computation loop */
 		do {
 			/* Compute pagerank and dangling values */
 			dangling = 0.0;
 
-			for (int i = 0; i < amIndex.size(); i = i + 2) //am_index = anIndex
+			for (int i = 0; i < amIndex.size(); i = i + 2) //indiceDados = anIndex
 			{
 				source = amIndex.get(i);
-				targetUrls = adjacencyMatrix.get(source);
+				targetUrls = dados.get(source);
 				outdegree = targetUrls.size();
 
 
@@ -258,32 +269,32 @@ public class PageRank {
 
 
 			/* Distribute pagerank values */
-			comunicador.Allreduce(localRV, 0, FinalRVT, 0, totalNumUrls, MPI.DOUBLE, MPI.SUM);
+			MPI.COMM_WORLD.Allreduce(localRV, 0, FinalRVT, 0, totalUrls, MPI.DOUBLE, MPI.SUM);
 
 
 			/* Distribute dangling values */
 			danglingArray[0] = dangling;
-			comunicador.Allreduce(danglingArray, 0, sumDangling, 0, 1, MPI.DOUBLE, MPI.SUM);
+			MPI.COMM_WORLD.Allreduce(danglingArray, 0, sumDangling, 0, 1, MPI.DOUBLE, MPI.SUM);
 			sum_dangling = sumDangling[0];
 
 			/* Recalculate the page rank values with damping factor 0.85 */
 			/* Root(process 0) computes delta to determine to stop or continue */
 			if (rank == 0) {
 
-				double dangling_value_per_page = sum_dangling / totalNumUrls;
+				double dangling_value_per_page = sum_dangling / totalUrls;
 
-				for (int i = 0; i < totalNumUrls; i++) {
+				for (int i = 0; i < totalUrls; i++) {
 					FinalRVT[i] = FinalRVT[i] + dangling_value_per_page;
 				}
 
-				for (int i = 0; i < totalNumUrls; i++) {
-					FinalRVT[i] = damping_factor * FinalRVT[i] + (1 - damping_factor) * (1.0 / (double) totalNumUrls);
+				for (int i = 0; i < totalUrls; i++) {
+					FinalRVT[i] = damping_factor * FinalRVT[i] + (1 - damping_factor) * (1.0 / (double) totalUrls);
 				}
 
 				deltaArray[0] = 0.0;
 
 
-				for (int i = 0; i < totalNumUrls; i++) {
+				for (int i = 0; i < totalUrls; i++) {
 
 					deltaArray[0] += Math.abs(intermediateRV[i] - FinalRVT[i]);
 					intermediateRV[i] = FinalRVT[i];
@@ -291,19 +302,19 @@ public class PageRank {
 
 			}
 
-			comunicador.Bcast(deltaArray, 0, 1, MPI.DOUBLE, 0);
+			MPI.COMM_WORLD.Bcast(deltaArray, 0, 1, MPI.DOUBLE, 0);
 
-			comunicador.Bcast(FinalRVT, 0, totalNumUrls, MPI.DOUBLE, 0);
+			MPI.COMM_WORLD.Bcast(FinalRVT, 0, totalUrls, MPI.DOUBLE, 0);
 
 
-			for (int k = 0; k < totalNumUrls; k++) {
+			for (int k = 0; k < totalUrls; k++) {
 				localRV[k] = 0.0;
 			}
 
 			if (rank == 0)
 				System.out.println("--Current Iteration: " + loop + " delta: " + deltaArray[0]);
 
-		} while (deltaArray[0] > threshold && ++loop < numIterations);
+		} while (deltaArray[0] > limite && ++loop < interacoes);
 
 	}
 
