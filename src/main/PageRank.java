@@ -11,12 +11,11 @@ public class PageRank {
 
 		/* Declaração de variáveis e estruturas do PageRank */
 		HashMap<Integer, ArrayList<Integer>> dados = new HashMap<>();
-		ArrayList<Integer> indiceDados = new ArrayList<>();
-		LinkedHashMap<Integer, Double> pageRanks = new LinkedHashMap<>();
-		String filename = args[3], outfilename = "saida.txt";
+		ArrayList<Integer> ligacoesNo = new ArrayList<>();
+		String filename = args[3];
+		int interacoes = Integer.parseInt(args[4]);
 		double limite = Double.parseDouble(args[5]);
-		int totalUrls, numeroUrls, interacoes = Integer.parseInt(args[4]);
-		long inicioEntrada, finalEntrada = 0, inicioExecucao = 0, finalExecucao = 0, inicioSaida, finalSaida;
+		long inicioEntrada, finalEntrada = 0, inicioExecucao = 0;
 
 		/* Inicialização do MPI */
 		MPI.Init(args);
@@ -26,7 +25,7 @@ public class PageRank {
 		/* Leitura dos dados através do arquivo para cada processo*/
 		inicioEntrada = System.currentTimeMillis();
 
-		leituraDados(filename, dados, indiceDados);
+		leituraDados(filename, dados, ligacoesNo);
 
 		if(rank == 0) {
 
@@ -34,76 +33,93 @@ public class PageRank {
 
 		}
 
-		/* Set totalUrls */
-		numeroUrls = indiceDados.size() / 2;
-		int numURL[] = new int[1];
-		numURL[0] = numeroUrls;
-		int totalNumUrl[] = new int[1];
-		MPI.COMM_WORLD.Allreduce(numURL, 0, totalNumUrl, 0, 1, MPI.INT, MPI.SUM);
-		totalUrls = totalNumUrl[0];
-		double FinalRVT[] = new double[totalUrls];
+		int numeroNos = ligacoesNo.size() / 2;
+		int totalNumeroNos = calcularNumeroNosTotais(numeroNos);
+		double pageRanks[] = new double[totalNumeroNos];
 
-		if (rank == 0)
+		if(rank == 0) {
+
 			inicioExecucao = System.currentTimeMillis();
 
-
-		for (int k = 0; k < totalUrls; k++) {
-			FinalRVT[k] = 1.0 / totalUrls;
 		}
 
-		/* Start the core computation of MPI PageRank */
-		mpi_pagerankfunc(dados, indiceDados, numeroUrls, totalUrls, interacoes, limite, FinalRVT);
+		//Inicia a computação do pagerank para os nós
+		pageRank(dados, ligacoesNo, totalNumeroNos, interacoes, limite, pageRanks);
 
-		if (rank == 0)
-			finalExecucao = System.currentTimeMillis() - inicioExecucao;
-
-		/* Save results to a file */
-		if (rank == 0) {
-			for (int i = 0; i < FinalRVT.length; i++) {
-				pageRanks.put(i, FinalRVT[i]);
-			}
-
-			inicioSaida = System.currentTimeMillis();
-			mpi_write(outfilename, pageRanks);
-			finalSaida = System.currentTimeMillis() - inicioSaida;
-
-			System.out.println("Input file : " + args[3]);
-			System.out.println("Output file : " + args[4]);
-			System.out.println("Number of Iterations: " + args[5]);
-			System.out.println("limite: " + args[6]);
-			System.out.println("Total I/O time taken:" + (finalEntrada + finalSaida) + " milliseconds");
-			System.out.println("Total Computation time taken:" + finalExecucao + " milliseconds");
-		}
-		/* Release resources e.g. free(adjacency_matrix); */
+		//Salvar o resultado em um arquivo e printa tempos de execução
+		salvarResultado(finalEntrada, inicioExecucao, rank, pageRanks);
 
 		MPI.Finalize();
 
 	}
 
-	private static void leituraDados(String filename, HashMap<Integer, ArrayList<Integer>> dados, ArrayList<Integer> indiceDados) throws IOException {
+	private static void salvarResultado(long finalEntrada, long inicioExecucao, int rank, double[] pageRanks) throws IOException {
+
+		if(rank != 0) {
+
+			return;
+
+		}
+
+		LinkedHashMap<Integer, Double> pageRanksMap = new LinkedHashMap<>();
+		long finalExecucao = System.currentTimeMillis() - inicioExecucao;
+
+		//PageRanks transformado para Map para facilitar escrita no arquivo
+		for(int i = 0; i < pageRanks.length; i++) {
+
+			pageRanksMap.put(i, pageRanks[i]);
+
+		}
+
+		long inicioEscrita = System.currentTimeMillis();
+
+		escreverArquivo(pageRanksMap);
+
+		long finalEscrita = System.currentTimeMillis() - inicioEscrita;
+
+		System.out.println("Resultado gravado no arquivo: saida.txt");
+		System.out.println("Tempo total para operações de I/O: " + (finalEntrada + finalEscrita) + " milissegundos");
+		System.out.println("Tempo total tomado pela execução do algoritmo Page Rank: " + finalExecucao + " milissegundos");
+
+	}
+
+	//Calcula numero de nós totais a partir do numéro de nós de cada bloco
+	private static int calcularNumeroNosTotais(int numeroNosPorProcessos) {
+
+		int numeroNosArray[] = new int[]{numeroNosPorProcessos};
+		int totalNumeroNosArray[] = new int[1];
+
+		MPI.COMM_WORLD.Allreduce(numeroNosArray, 0, totalNumeroNosArray, 0, 1, MPI.INT, MPI.SUM);
+
+		return totalNumeroNosArray[0];
+
+	}
+
+	private static void leituraDados(String filename, HashMap<Integer, ArrayList<Integer>> dados, ArrayList<Integer> ligacoesNo) throws IOException {
 
 		if(MPI.COMM_WORLD.Rank() == 0) {
 
-			//preenchimento dos nós destino, conforme dispostos no arquivo.
-			preencherNosDestino(filename, dados);
+			//preenchimento dos nós conforme dispostos no arquivo.
+			lerArquivo(filename, dados);
 
 			ArrayList<Integer> nos = new ArrayList<>(dados.keySet());
-			int totalUrls = dados.size();
+			int totalNos = dados.size();
 			int numeroProcessos = MPI.COMM_WORLD.Size();
-			int divisoes = (totalUrls) / numeroProcessos;
-			int resto = (totalUrls) % numeroProcessos;
+			int divisoes = (totalNos) / numeroProcessos;
+			int resto = (totalNos) % numeroProcessos;
 			int strtIndex = 0, j = 0, inicio, h;
 			int tamBloco, tamLigacoes;
 
 			for(int i = 0; i < numeroProcessos; i++) {
 
-				h = 0;
-				inicio = strtIndex;
 				tamBloco = calcularTamanhoBloco(divisoes, resto, i);
 				tamLigacoes = tamBloco * 2;
 
 				//vetor de ligações dos nós
 				int[] ligacoes = new int[tamLigacoes];
+
+				h = 0;
+				inicio = strtIndex;
 
 				//repetição para acessar os valores dos nós a cada bloco
 				for(strtIndex = inicio; strtIndex <= ((inicio + tamBloco) - 1); strtIndex++) {
@@ -115,71 +131,94 @@ public class PageRank {
 
 				}
 
-				int[] tamDados = new int[1];
-				tamDados[0] = tamLigacoes;
-
-				//verificação para o primeiro processo
-				if(i == 0) {
-
-					//preenchimento dos valores de ligações a serem usados além do método
-					for(int l = 0; l < tamDados[0]; l++) {
-
-						indiceDados.add(ligacoes[l]);
-
-					}
-
-				} else {
-
-					//envio do tamanho dos dados para os demais processos
-					MPI.COMM_WORLD.Send(tamDados, 0, 1, MPI.INT, i, 0);
-					MPI.COMM_WORLD.Send(ligacoes, 0, tamDados[0], MPI.INT, i, 1);
-
-				}
-
-
-				for (int k = 0; k < tamBloco * 2; k = k + 2) {
-					int source = ligacoes[k];
-					int outdegree = ligacoes[k + 1];
-					int[] targetList = new int[outdegree];
-
-					ArrayList<Integer> targetUrls = dados.get(source);
-
-					for (int n = 0; n < outdegree; n++) {
-						targetList[n] = targetUrls.get(n);
-					}
-
-					if (i != 0) {
-						MPI.COMM_WORLD.Send(targetList, 0, outdegree, MPI.INT, i, 2);
-					}
-				}
+				preencherNosDestinoPorProcesso(dados, tamLigacoes, i, ligacoes, ligacoesNo);
 
 			}
 
 		} else {
 
-			int[] am_size = new int[1];
-			MPI.COMM_WORLD.Recv(am_size, 0, 1, MPI.INT, 0, 0);
+			receberNosProcessoMestre(dados, ligacoesNo);
 
-			int[] t_indiceDados = new int[am_size[0]];
-			MPI.COMM_WORLD.Recv(t_indiceDados, 0, am_size[0], MPI.INT, 0, 1);
+		}
 
-			for (int l = 0; l < am_size[0]; l++) {
-				indiceDados.add(t_indiceDados[l]);
+	}
+
+	private static void receberNosProcessoMestre(HashMap<Integer, ArrayList<Integer>> dados, ArrayList<Integer> ligacoesNo) {
+
+		int[] tamLigacoesComm = new int[1];
+
+		MPI.COMM_WORLD.Recv(tamLigacoesComm, 0, 1, MPI.INT, 0, 0);
+
+		int tamLigacoes = tamLigacoesComm[0];
+		int[] ligacoes = new int[tamLigacoes];
+
+		MPI.COMM_WORLD.Recv(ligacoes, 0, tamLigacoes, MPI.INT, 0, 1);
+
+		for(int l = 0; l < tamLigacoes; l++) {
+
+			ligacoesNo.add(ligacoes[l]);
+
+		}
+
+		for(int k = 0; k < tamLigacoes; k = k + 2) {
+
+			int no = ligacoes[k];
+			int numeroLigacoesNo = ligacoes[k + 1];
+			int[] nosDestinoArray = new int[numeroLigacoesNo];
+			ArrayList<Integer> nosDestino = new ArrayList<>();
+
+			MPI.COMM_WORLD.Recv(nosDestinoArray, 0, numeroLigacoesNo, MPI.INT, 0, 2);
+
+			for (int m = 0; m < numeroLigacoesNo; m++) {
+
+				nosDestino.add(nosDestinoArray[m]);
+
 			}
 
-			int no2Urls = am_size[0];
-			for (int p = 0; p < no2Urls; p = p + 2) {
-				int sourceUrl = t_indiceDados[p];
-				int outdegree = t_indiceDados[p + 1];
-				int[] target = new int[outdegree];
-				MPI.COMM_WORLD.Recv(target, 0, outdegree, MPI.INT, 0, 2);
-				ArrayList<Integer> targetUrls = new ArrayList<>();
+			dados.put(no, nosDestino);
 
-				for (int m = 0; m < outdegree; m++) {
-					targetUrls.add(target[m]);
+		}
+
+	}
+
+	private static void preencherNosDestinoPorProcesso(HashMap<Integer, ArrayList<Integer>> dados, int tamLigacoes, int i, int[] ligacoes, ArrayList<Integer> ligacoesNo) {
+
+		//verificação para o primeiro processo
+		if(i == 0) {
+
+			//preenchimento dos valores de ligações a serem usados além do método
+			for(int l = 0; l < tamLigacoes; l++) {
+
+				ligacoesNo.add(ligacoes[l]);
+
+			}
+
+		} else {
+
+			int[] tamDados = new int[]{tamLigacoes};
+
+			//envio do tamanho dos dados para os demais processos
+			MPI.COMM_WORLD.Send(tamDados, 0, 1, MPI.INT, i, 0);
+			MPI.COMM_WORLD.Send(ligacoes, 0, tamLigacoes, MPI.INT, i, 1);
+
+		}
+
+		for(int k = 0; k < tamLigacoes; k = k + 2) {
+
+			if(i != 0) {
+
+				int no = ligacoes[k];
+				int numeroLigacoesNo = ligacoes[k + 1];
+				int[] nosDestino = new int[numeroLigacoesNo];
+
+				for(int n = 0; n < numeroLigacoesNo; n++) {
+
+					nosDestino[n] = dados.get(no).get(n);
+
 				}
 
-				dados.put(sourceUrl, targetUrls);
+				MPI.COMM_WORLD.Send(nosDestino, 0, numeroLigacoesNo, MPI.INT, i, 2);
+
 			}
 
 		}
@@ -193,7 +232,7 @@ public class PageRank {
 
 	}
 
-	private static void preencherNosDestino(String filename, HashMap<Integer, ArrayList<Integer>> dados) throws IOException {
+	private static void lerArquivo(String filename, HashMap<Integer, ArrayList<Integer>> dados) throws IOException {
 
 		DataInputStream dataInputStream = new DataInputStream(new FileInputStream("files/" + filename));
 		BufferedReader leitorUrls = new BufferedReader(new InputStreamReader(dataInputStream));
@@ -201,7 +240,7 @@ public class PageRank {
 
 		while((entrada = leitorUrls.readLine()) != null) {
 
-			ArrayList<Integer> urlsDestino = new ArrayList<>();
+			ArrayList<Integer> nosDestino = new ArrayList<>();
 
 			//Declaração de array dos nós
 			String[] nos = entrada.split(" ");
@@ -209,12 +248,12 @@ public class PageRank {
 			//Preenchimento dos nós destino do primeiro nó da linha
 			for(int i = 1; i < nos.length; i++) {
 
-				urlsDestino.add(Integer.valueOf(nos[i]));
+				nosDestino.add(Integer.valueOf(nos[i]));
 
 			}
 
 			//relação dos nós destino com o primeiro nó da linha
-			dados.put(Integer.valueOf(nos[0]), urlsDestino);
+			dados.put(Integer.valueOf(nos[0]), nosDestino);
 
 		}
 
@@ -222,152 +261,162 @@ public class PageRank {
 
 	}
 
-	private static void mpi_pagerankfunc(HashMap<Integer, ArrayList<Integer>> dados, ArrayList<Integer> amIndex, int numeroUrls, int totalUrls,
-										 int interacoes, double limite, double[] FinalRVT) {
+	private static void pageRank(HashMap<Integer, ArrayList<Integer>> dados, ArrayList<Integer> ligacoesNo, int totalNumeroNos,
+								 int interacoes, double limite, double[] pageRanks) {
+
+		//Probabilidade inicial para o PageRank computado iterativamente
+		for(int k = 0; k < totalNumeroNos; k++) {
+
+			pageRanks[k] = 1.0 / totalNumeroNos;
+
+		}
 
 		/* Definitions of variables */
-		double dangling, sum_dangling, intermediate_rank_value, damping_factor = 0.85;
-		int source, outdegree, targetUrl, loop = 0;
-		ArrayList<Integer> targetUrls;
-
+		double fatorCompensacao, fatorCompensacaoTotal, fatorAmortecimento = 0.85;
+		int no, numeroLigacoesNo, noDestino, l = 0;
+		ArrayList<Integer> nosDestino;
 
 		/* Allocate memory and initialize values for local_rank_values_table */
-		double[] intermediateRV = new double[totalUrls];
-		double[] localRV = new double[totalUrls];
-		double[] danglingArray = new double[1];
-		double[] sumDangling = new double[1];
-		double[] deltaArray = new double[1];
-		deltaArray[0] = 0.0;
+		double[] pageRanksPorInteracao = new double[totalNumeroNos];
+		double[] pageRanksProcessoAtual = new double[totalNumeroNos];
+		double[] variacao = new double[]{0.0};
 
-		/* Get MPI rank */
 		int rank = MPI.COMM_WORLD.Rank();
 
-		if (rank == 0)
-			System.out.println("Max_Iterations: " + interacoes + ", limite: " + limite);
-		/* Start computation loop */
+		if(rank == 0) {
+
+			System.out.println("Máximo de interações: " + interacoes + ", limite da variação: " + limite);
+
+		}
+
+		// Algoritmo interativo
 		do {
-			/* Compute pagerank and dangling values */
-			dangling = 0.0;
 
-			for (int i = 0; i < amIndex.size(); i = i + 2) //indiceDados = anIndex
-			{
-				source = amIndex.get(i);
-				targetUrls = dados.get(source);
-				outdegree = targetUrls.size();
+			fatorCompensacao = 0.0;
 
+			//Calcula o PageRank local
+			for(int i = 0; i < ligacoesNo.size(); i = i + 2) {
 
-				for (int j = 0; j < outdegree; j++) {
-					targetUrl = targetUrls.get(j);
-					intermediate_rank_value = localRV[targetUrl] + FinalRVT[source] / (double) outdegree;
-					localRV[targetUrl] = intermediate_rank_value;
+				no = ligacoesNo.get(i);
+				nosDestino = dados.get(no);
+				numeroLigacoesNo = nosDestino.size();
+
+				for(int j = 0; j < numeroLigacoesNo; j++) {
+
+					noDestino = nosDestino.get(j);
+					pageRanksProcessoAtual[noDestino] = pageRanksProcessoAtual[noDestino] + pageRanks[no] / (double) numeroLigacoesNo;
+
 				}
 
-				if (outdegree == 0) {
-					dangling += FinalRVT[source];
-				}
-			}
+				//Caso seja um nó sem ligação, é incrementado o valor de amortecimento
+				if(numeroLigacoesNo == 0) {
 
+					fatorCompensacao += pageRanks[no];
 
-			/* Distribute pagerank values */
-			MPI.COMM_WORLD.Allreduce(localRV, 0, FinalRVT, 0, totalUrls, MPI.DOUBLE, MPI.SUM);
-
-
-			/* Distribute dangling values */
-			danglingArray[0] = dangling;
-			MPI.COMM_WORLD.Allreduce(danglingArray, 0, sumDangling, 0, 1, MPI.DOUBLE, MPI.SUM);
-			sum_dangling = sumDangling[0];
-
-			/* Recalculate the page rank values with damping factor 0.85 */
-			/* Root(process 0) computes delta to determine to stop or continue */
-			if (rank == 0) {
-
-				double dangling_value_per_page = sum_dangling / totalUrls;
-
-				for (int i = 0; i < totalUrls; i++) {
-					FinalRVT[i] = FinalRVT[i] + dangling_value_per_page;
-				}
-
-				for (int i = 0; i < totalUrls; i++) {
-					FinalRVT[i] = damping_factor * FinalRVT[i] + (1 - damping_factor) * (1.0 / (double) totalUrls);
-				}
-
-				deltaArray[0] = 0.0;
-
-
-				for (int i = 0; i < totalUrls; i++) {
-
-					deltaArray[0] += Math.abs(intermediateRV[i] - FinalRVT[i]);
-					intermediateRV[i] = FinalRVT[i];
 				}
 
 			}
 
-			MPI.COMM_WORLD.Bcast(deltaArray, 0, 1, MPI.DOUBLE, 0);
+			//Soma os page ranks de cada bloco ao pagerank total
+			MPI.COMM_WORLD.Allreduce(pageRanksProcessoAtual, 0, pageRanks, 0, totalNumeroNos, MPI.DOUBLE, MPI.SUM);
 
-			MPI.COMM_WORLD.Bcast(FinalRVT, 0, totalUrls, MPI.DOUBLE, 0);
+			//Soma os fatores de compensação de cada bloco ao fator de compensação total
+			double[] fatorCompensacaoArray = new double[1];
+			double[] fatorCompensacaoTotalArray = new double[1];
+			fatorCompensacaoArray[0] = fatorCompensacao;
+			MPI.COMM_WORLD.Allreduce(fatorCompensacaoArray, 0, fatorCompensacaoTotalArray, 0, 1, MPI.DOUBLE, MPI.SUM);
+			fatorCompensacaoTotal = fatorCompensacaoTotalArray[0];
 
+			// Recalcula os page ranks considerando o fator de amortecimento padrão (0.85) e o fator de compensação por nós
+			if(rank == 0) {
 
-			for (int k = 0; k < totalUrls; k++) {
-				localRV[k] = 0.0;
+				double fatorCompensacaoPorNo = fatorCompensacaoTotal / totalNumeroNos;
+
+				for(int i = 0; i < totalNumeroNos; i++) {
+
+					pageRanks[i] = pageRanks[i] + fatorCompensacaoPorNo;
+
+				}
+
+				for(int i = 0; i < totalNumeroNos; i++) {
+
+					pageRanks[i] = fatorAmortecimento * pageRanks[i] + ((1 - fatorAmortecimento) / (double) totalNumeroNos);
+
+				}
+
+				variacao[0] = 0.0;
+
+				//Calculo de variação da interação atual com o valor total do pageranks com a finalidade
+				//de determinar se as interações devem ou não continuar
+				for(int i = 0; i < totalNumeroNos; i++) {
+
+					variacao[0] += Math.abs(pageRanksPorInteracao[i] - pageRanks[i]);
+					pageRanksPorInteracao[i] = pageRanks[i];
+
+				}
+
 			}
 
-			if (rank == 0)
-				System.out.println("--Current Iteration: " + loop + " delta: " + deltaArray[0]);
+			//envia a todos processos os valores de variação e atualiza o pageRanks
+			MPI.COMM_WORLD.Bcast(variacao, 0, 1, MPI.DOUBLE, 0);
+			MPI.COMM_WORLD.Bcast(pageRanks, 0, totalNumeroNos, MPI.DOUBLE, 0);
 
-		} while (deltaArray[0] > limite && ++loop < interacoes);
+			//Reiniciar valores do pageRanks auxiliar
+			for(int k = 0; k < totalNumeroNos; k++) {
+
+				pageRanksProcessoAtual[k] = 0.0;
+
+			}
+
+			if(rank == 0) {
+
+				System.out.println("Interação " + l + " variação: " + variacao[0]);
+
+			}
+
+		//A Variação deve ser menor que o limite e as interações menores do que o número informado para o máximo de interações
+		} while(variacao[0] > limite && ++l < interacoes);
 
 	}
 
-	private static void mpi_write(String filename, LinkedHashMap<Integer, Double> sortHash) throws IOException {
+	private static void escreverArquivo(LinkedHashMap<Integer, Double> pageRanksMap) throws IOException {
 
-		double probabilidades = 0.0;
-		int[] keys = new int[sortHash.size()];
-		double[] values = new double[sortHash.size()];
-		int index = 0;
+		int[] nos = new int[pageRanksMap.size()];
+		double[] pageRanks = new double[pageRanksMap.size()];
+		int j = 0;
 
-		for(Double val : sortHash.values()) {
+		for(Map.Entry<Integer, Double> mapEntry : pageRanksMap.entrySet()) {
 
-			probabilidades += val;
-
-		}
-
-		for(Map.Entry<Integer, Double> mapEntry : sortHash.entrySet()) {
-
-			keys[index] = Integer.parseInt(mapEntry.getKey().toString());
-			values[index] = Double.parseDouble(mapEntry.getValue().toString());
-			index++;
+			nos[j] = mapEntry.getKey();
+			pageRanks[j] = mapEntry.getValue();
+			j++;
 
 		}
 
-		/* Sort the page rank values in ascending order */
-		List<Double> pagesRank = new ArrayList<>(sortHash.values());
-		Collections.sort(pagesRank);
-		ListIterator sorted_page_rank_iterator = pagesRank.listIterator(pagesRank.size());
-		int number_web_pages = 0;
-		int totalUrls = pagesRank.size();
+		//Ordenação dos pageRanks
+		List<Double> pageRanksOrdenados = new ArrayList<>(pageRanksMap.values());
+		Collections.sort(pageRanksOrdenados);
+		ListIterator iterator = pageRanksOrdenados.listIterator(pageRanksOrdenados.size());
+		int numeroNos = 0;
+		int numeroTotalNos = pageRanksOrdenados.size();
 
-		/*File operation to write result to output file */
-		Writer output = new BufferedWriter(new FileWriter(new File(filename)));
-		output.append("\nTop 10 URLs with Highest Page Rank values " + "\n\n" + "--------------------------------------" + "\n");
+		Writer output = new BufferedWriter(new FileWriter(new File("saida.txt")));
+		output.append("\nTop 10 de páginas de maiores valores de 'page rank' " + "\n\n" + "--------------------------------------" + "\n");
 		output.append("|\t" + "URL" + "\t\t|\t" + "Page Rank" + "\t\t\t|\n" + "--------------------------------------" + "\n");
 
-		while(sorted_page_rank_iterator.hasPrevious() && number_web_pages++ < 10) {
+		//Escrita do Top 10 de páginas de maiores valores de 'page rank'
+		while(iterator.hasPrevious() && numeroNos++ < 10) {
 
-			String str = sorted_page_rank_iterator.previous().toString();
-			double pagerankop = Double.valueOf(str);
+			double pageRankValor = Double.valueOf(iterator.previous().toString());
 
-			/*Get top 10 URLs along with their Page Rank values
-			 *and store this list into external output file
-			 */
+			for(int i = 0; i < numeroTotalNos; i++) {
 
-			for(int i = 0; i < totalUrls; i++) {
+				if(pageRanks[i] == pageRankValor) {
 
-				if(values[i] == pagerankop) {
-
-					output.write("|\t" + keys[i] + "\t\t|\t" + String.format("%2.17f", pagerankop) + "\t|\n");
-					System.out.println("|\t" + keys[i] + "\t\t|\t" + String.format("%2.17f", pagerankop) + "\t|\n");
+					output.write("|\t" + nos[i] + "\t\t|\t" + String.format("%2.17f", pageRankValor) + "\t|\n");
+					System.out.println("|\t" + nos[i] + "\t\t|\t" + String.format("%2.17f", pageRankValor) + "\t|\n");
 					output.write("---------------------------------------" + "\n");
-					values[i] = -1;
+					pageRanks[i] = -1;
 
 					break;
 
@@ -377,9 +426,6 @@ public class PageRank {
 
 		}
 
-		output.append("\n" + "Cumulative Sum of Page Rank values\n");
-		output.append("--------------------------------------" + "\n");
-		output.write(String.format("%1.16f", probabilidades) + "\n");
 		output.close();
 
 	}
