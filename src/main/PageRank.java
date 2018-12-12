@@ -271,12 +271,10 @@ public class PageRank {
 
 		}
 
-		/* Definitions of variables */
 		double fatorCompensacao, fatorCompensacaoTotal, fatorAmortecimento = 0.85;
 		int no, numeroLigacoesNo, noDestino, l = 0;
 		ArrayList<Integer> nosDestino;
 
-		/* Allocate memory and initialize values for local_rank_values_table */
 		double[] pageRanksPorInteracao = new double[totalNumeroNos];
 		double[] pageRanksProcessoAtual = new double[totalNumeroNos];
 		double[] variacao = new double[]{0.0};
